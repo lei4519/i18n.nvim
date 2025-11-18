@@ -1,0 +1,24 @@
+{
+  "common": {
+    "hello": "你好世界",
+    "welcome": "欢迎使用我们的应用",
+    "goodbye": "再见",
+    "thanks": "谢谢"
+  },
+  "auth": {
+    "login": "登录",
+    "logout": "登出",
+    "register": "注册",
+    "forgot_password": "忘记密码？"
+  },
+  "errors": {
+    "not_found": "页面未找到",
+    "server_error": "服务器内部错误",
+    "unauthorized": "未授权访问"
+  },
+  "products": {
+    "add_to_cart": "加入购物车",
+    "view_details": "查看详情",
+    "out_of_stock": "缺货"
+  }
+}

@@ -1,0 +1,40 @@
+import React from 'react';
+
+function App() {
+  return (
+    <div className="app">
+      <header>
+        <h1>{t("common.hello")}</h1>
+        <p>{t("common.welcome")}</p>
+      </header>
+      
+      <main>
+        <section className="auth">
+          <button>{t("auth.login")}</button>
+          <button>{t("auth.register")}</button>
+          <a href="/forgot">{t("auth.forgot_password")}</a>
+        </section>
+        
+        <section className="products">
+          <div className="product-card">
+            <h3>Product Name</h3>
+            <button>{t("products.add_to_cart")}</button>
+            <a href="#">{t("products.view_details")}</a>
+          </div>
+          
+          <div className="product-card out-of-stock">
+            <h3>Unavailable Product</h3>
+            <span>{t("products.out_of_stock")}</span>
+          </div>
+        </section>
+      </main>
+      
+      <footer>
+        <p>{t("common.thanks")}</p>
+        <p>{t("common.goodbye")}</p>
+      </footer>
+    </div>
+  );
+}
+
+export default App;

@@ -1,0 +1,24 @@
+{
+  "common": {
+    "hello": "こんにちは世界",
+    "welcome": "私たちのアプリケーションへようこそ",
+    "goodbye": "さようなら",
+    "thanks": "ありがとう"
+  },
+  "auth": {
+    "login": "ログイン",
+    "logout": "ログアウト",
+    "register": "登録",
+    "forgot_password": "パスワードをお忘れですか？"
+  },
+  "errors": {
+    "not_found": "ページが見つかりません",
+    "server_error": "内部サーバーエラー",
+    "unauthorized": "不正なアクセス"
+  },
+  "products": {
+    "add_to_cart": "カートに追加",
+    "view_details": "詳細を表示",
+    "out_of_stock": "在庫切れ"
+  }
+}
