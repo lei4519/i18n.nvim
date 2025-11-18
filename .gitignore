@@ -1,0 +1,22 @@
+# Neovim
+*.swp
+*.swo
+*~
+
+# Lua
+luac.out
+
+# Testing
+*.tmp
+*.test.lua
+
+# macOS
+.DS_Store
+
+# Example project
+examples/demo-project/node_modules/
+examples/demo-project/dist/
+examples/demo-project/.vite/
+
+# Temporary files
+*.log

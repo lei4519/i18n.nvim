@@ -1,23 +1,288 @@
-local i18n = {}
+--- i18n 插件主入口
+local config = require("i18n.config")
+local parser = require("i18n.parser")
+local translator = require("i18n.translator")
+local virt_text = require("i18n.virt_text")
+local editor = require("i18n.editor")
 
-i18n.setup = function(opts)
-	local hl = vim.api.nvim_set_hl
+local M = {}
 
-	hl(0, "@i18n.translation", { link = "Comment" })
+--- 更新缓冲区的虚拟文本（完整更新）
+--- @param bufnr number 缓冲区号
+local function update_buffer_full(bufnr)
+  if not config.config.enabled or not config.config.virt_text.enabled then
+    return
+  end
 
-	local group = vim.api.nvim_create_augroup("i18n", {})
+  local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+  if not config.is_supported_filetype(filetype) then
+    return
+  end
 
-	vim.api.nvim_create_autocmd({
-		"BufEnter",
-		"TextChanged",
-		"TextChangedI",
-		"TextChangedP",
-	}, {
-		pattern = "*.{ts,js,tsx,jsx}",
-		group = group,
-		callback = function(ev)
-			end
-	})
+  local filepath = vim.api.nvim_buf_get_name(bufnr)
+  if filepath == "" then
+    return
+  end
+
+  local i18n_dir = config.get_i18n_dir(bufnr)
+  if not i18n_dir or vim.fn.isdirectory(i18n_dir) == 0 then
+    return
+  end
+
+  -- 清除旧的虚拟文本
+  virt_text.clear_buffer_virt_text(bufnr)
+
+  -- 获取当前语言的 JSON 文件
+  local languages = translator.get_available_languages(i18n_dir)
+  local current_lang = config.get_current_language()
+  local json_file = languages[current_lang]
+
+  if not json_file then
+    return
+  end
+
+  -- 解析文件中的 t() 调用
+  parser.parse_file_async(filepath, function(results)
+    -- 对每个结果获取翻译并显示
+    for _, result in ipairs(results) do
+      translator.get_translation_async(json_file, result.key, function(translation, _)
+        if translation then
+          virt_text.set_virt_text(bufnr, result.line, result.col, translation)
+        end
+      end)
+    end
+  end)
 end
 
-return i18n
+--- 更新缓冲区的虚拟文本（增量更新）
+--- @param bufnr number 缓冲区号
+--- @param line_start number 起始行号 (1-based)
+--- @param line_end number 结束行号 (1-based)
+local function update_buffer_incremental(bufnr, line_start, line_end)
+  if not config.config.enabled or not config.config.virt_text.enabled then
+    return
+  end
+
+  local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+  if not config.is_supported_filetype(filetype) then
+    return
+  end
+
+  local filepath = vim.api.nvim_buf_get_name(bufnr)
+  if filepath == "" then
+    return
+  end
+
+  local i18n_dir = config.get_i18n_dir(bufnr)
+  if not i18n_dir or vim.fn.isdirectory(i18n_dir) == 0 then
+    return
+  end
+
+  local languages = translator.get_available_languages(i18n_dir)
+  local current_lang = config.get_current_language()
+  local json_file = languages[current_lang]
+
+  if not json_file then
+    return
+  end
+
+  -- 更新变化的行
+  for line = line_start, line_end do
+    -- 清除该行的虚拟文本
+    virt_text.clear_line_virt_text(bufnr, line)
+
+    -- 解析该行
+    parser.parse_line_async(filepath, line, function(results)
+      for _, result in ipairs(results) do
+        translator.get_translation_async(json_file, result.key, function(translation, _)
+          if translation then
+            virt_text.set_virt_text(bufnr, result.line, result.col, translation)
+          end
+        end)
+      end
+    end)
+  end
+end
+
+--- 插件设置
+--- @param opts table|nil 用户配置
+function M.setup(opts)
+  -- 配置初始化
+  config.setup(opts)
+
+  -- 设置高亮组
+  vim.api.nvim_set_hl(0, "@i18n.translation", { link = config.config.virt_text.highlight })
+
+  -- 创建自动命令组
+  local group = vim.api.nvim_create_augroup("i18n", { clear = true })
+
+  -- BufEnter: 完整更新
+  vim.api.nvim_create_autocmd("BufEnter", {
+    group = group,
+    pattern = "*.{ts,js,tsx,jsx}",
+    callback = function(ev)
+      update_buffer_full(ev.buf)
+    end,
+  })
+
+  -- TextChanged: 增量更新
+  -- 使用 debounce 避免频繁更新
+  local timer = vim.uv.new_timer()
+  local pending_updates = {}
+
+  local function process_pending_updates()
+    for bufnr, lines in pairs(pending_updates) do
+      if vim.api.nvim_buf_is_valid(bufnr) then
+        local line_start = math.min(unpack(lines))
+        local line_end = math.max(unpack(lines))
+        update_buffer_incremental(bufnr, line_start, line_end)
+      end
+    end
+    pending_updates = {}
+  end
+
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+    group = group,
+    pattern = "*.{ts,js,tsx,jsx}",
+    callback = function(ev)
+      local bufnr = ev.buf
+
+      -- 获取当前光标行
+      local line = vim.api.nvim_win_get_cursor(0)[1]
+
+      -- 添加到待更新列表
+      if not pending_updates[bufnr] then
+        pending_updates[bufnr] = {}
+      end
+      table.insert(pending_updates[bufnr], line)
+
+      -- 重启定时器（debounce）
+      timer:stop()
+      timer:start(
+        500, -- 500ms 延迟
+        0,
+        vim.schedule_wrap(process_pending_updates)
+      )
+    end,
+  })
+
+  -- 当 i18n 文件变化时，清除缓存并刷新所有缓冲区
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = group,
+    pattern = "*/i18n/messages/*.json",
+    callback = function(_)
+      -- 清除翻译缓存
+      translator.clear_cache()
+
+      -- 刷新所有打开的支持文件类型的缓冲区
+      for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
+          local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+          if config.is_supported_filetype(filetype) then
+            update_buffer_full(bufnr)
+          end
+        end
+      end
+    end,
+  })
+
+  -- 用户命令
+  -- 切换虚拟文本显示
+  vim.api.nvim_create_user_command("I18nToggle", function()
+    local enabled = virt_text.toggle_virt_text()
+    if enabled then
+      vim.notify("I18n virtual text enabled", vim.log.levels.INFO)
+      -- 刷新当前缓冲区
+      update_buffer_full(vim.api.nvim_get_current_buf())
+    else
+      vim.notify("I18n virtual text disabled", vim.log.levels.INFO)
+    end
+  end, {})
+
+  -- 设置当前语言
+  vim.api.nvim_create_user_command("I18nSetLang", function(opts)
+    local lang = opts.args
+    if lang == "" then
+      -- 显示可用语言列表
+      local i18n_dir = config.get_i18n_dir()
+      if not i18n_dir then
+        vim.notify("Cannot find i18n directory", vim.log.levels.ERROR)
+        return
+      end
+
+      local languages = translator.get_available_languages(i18n_dir)
+      local lang_list = vim.tbl_keys(languages)
+
+      if #lang_list == 0 then
+        vim.notify("No translation files found", vim.log.levels.ERROR)
+        return
+      end
+
+      vim.ui.select(lang_list, {
+        prompt = "Select language:",
+      }, function(selected)
+        if selected then
+          config.set_current_language(selected)
+          vim.notify("Language set to: " .. selected, vim.log.levels.INFO)
+
+          -- 刷新所有缓冲区
+          for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
+              local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+              if config.is_supported_filetype(filetype) then
+                update_buffer_full(bufnr)
+              end
+            end
+          end
+        end
+      end)
+    else
+      config.set_current_language(lang)
+      vim.notify("Language set to: " .. lang, vim.log.levels.INFO)
+
+      -- 刷新所有缓冲区
+      for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
+          local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+          if config.is_supported_filetype(filetype) then
+            update_buffer_full(bufnr)
+          end
+        end
+      end
+    end
+  end, {
+    nargs = "?",
+    desc = "Set current language for i18n display",
+  })
+
+  -- 打开多语言编辑器
+  vim.api.nvim_create_user_command("I18nEdit", function(opts)
+    local key = opts.args
+
+    if key == "" then
+      -- 尝试从光标位置获取 key
+      key = editor.get_key_under_cursor()
+    end
+
+    if not key or key == "" then
+      vim.notify("No i18n key found. Usage: :I18nEdit <key>", vim.log.levels.ERROR)
+      return
+    end
+
+    editor.open_editor(key)
+  end, {
+    nargs = "?",
+    desc = "Open i18n editor for a key",
+  })
+
+  -- 刷新当前缓冲区
+  vim.api.nvim_create_user_command("I18nRefresh", function()
+    translator.clear_cache()
+    update_buffer_full(vim.api.nvim_get_current_buf())
+    vim.notify("I18n virtual text refreshed", vim.log.levels.INFO)
+  end, {
+    desc = "Refresh i18n virtual text for current buffer",
+  })
+end
+
+return M
