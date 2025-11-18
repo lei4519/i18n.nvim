@@ -1,6 +1,7 @@
 --- 多语言编辑面板
 local config = require("i18n.config")
 local translator = require("i18n.translator")
+local openai = require("i18n.openai")
 
 local M = {}
 
@@ -26,28 +27,17 @@ function M.open_editor(key)
     return
   end
 
-  -- 创建浮动窗口
-  local width = math.min(100, math.floor(vim.o.columns * 0.8))
-  local height = math.min(20, math.floor(vim.o.lines * 0.6))
-
-  local row = math.floor((vim.o.lines - height) / 2)
-  local col = math.floor((vim.o.columns - width) / 2)
-
   -- 创建缓冲区
   local buf = vim.api.nvim_create_buf(false, true)
 
-  -- 创建窗口
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    row = row,
-    col = col,
-    style = "minimal",
-    border = "rounded",
-    title = " I18n Editor: " .. key .. " ",
-    title_pos = "center",
-  })
+  -- 创建正常窗口（split）
+  vim.cmd("botright split")
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, buf)
+  vim.api.nvim_win_set_height(win, math.min(20, math.floor(vim.o.lines * 0.4)))
+  
+  -- 设置窗口标题（使用状态栏）
+  vim.wo[win].statusline = string.format("%%#Title# I18n Editor: %s %%*", key)
 
   -- 设置缓冲区选项
   vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
@@ -60,8 +50,8 @@ function M.open_editor(key)
 
   table.insert(lines, "Key: " .. key)
   table.insert(lines, "")
-  table.insert(lines, "Press <e> to edit, <d> to delete, <q> to quit")
-  table.insert(lines, string.rep("─", width - 2))
+  table.insert(lines, "Press <e> to edit, <d> to delete, <t> to translate, <q> to quit")
+  table.insert(lines, string.rep("─", 80))
 
   -- 异步获取所有语言的翻译
   local pending_count = 0
@@ -165,6 +155,108 @@ function M.open_editor(key)
           end
         end)
       end
+    end)
+  end, { buffer = buf, nowait = true })
+
+  -- 翻译（使用 OpenAI）
+  vim.keymap.set("n", "t", function()
+    -- 检查 OpenAI 配置
+    local ok, err = openai.check_config()
+    if not ok then
+      vim.notify("OpenAI translation not available: " .. err, vim.log.levels.ERROR)
+      return
+    end
+
+    -- 获取默认语言的翻译
+    local default_lang = config.config.default_language
+    local default_file = nil
+    
+    for _, item in ipairs(lang_list) do
+      if item.lang == default_lang then
+        default_file = item.json_file
+        break
+      end
+    end
+
+    if not default_file then
+      vim.notify("Default language not found", vim.log.levels.ERROR)
+      return
+    end
+
+    vim.notify("Translating...", vim.log.levels.INFO)
+
+    -- 获取默认语言的翻译文本
+    translator.get_translation_async(default_file, key, function(source_text, _)
+      if not source_text then
+        vim.notify("Source translation not found for key: " .. key, vim.log.levels.ERROR)
+        return
+      end
+
+      -- 获取所有需要翻译的语言
+      local target_langs = {}
+      for _, item in ipairs(lang_list) do
+        if item.lang ~= default_lang then
+          table.insert(target_langs, item.lang)
+        end
+      end
+
+      -- 批量翻译
+      local texts = { [default_lang] = source_text }
+      openai.translate_batch_async(texts, default_lang, target_langs, function(results, errors)
+        local success_count = 0
+        local error_count = 0
+
+        -- 更新所有翻译
+        local pending_updates = #target_langs
+        
+        for _, target_lang in ipairs(target_langs) do
+          local translation = results[target_lang]
+          local error = errors[target_lang]
+
+          if translation then
+            -- 找到对应的 JSON 文件
+            local json_file = nil
+            for _, item in ipairs(lang_list) do
+              if item.lang == target_lang then
+                json_file = item.json_file
+                break
+              end
+            end
+
+            if json_file then
+              translator.update_translation_async(json_file, key, translation, function(update_success, update_err)
+                if update_success then
+                  success_count = success_count + 1
+                else
+                  error_count = error_count + 1
+                  vim.notify(string.format("Failed to update [%s]: %s", target_lang, update_err or "unknown"), vim.log.levels.ERROR)
+                end
+
+                pending_updates = pending_updates - 1
+
+                if pending_updates == 0 then
+                  vim.notify(string.format("Translation complete: %d success, %d failed", success_count, error_count), vim.log.levels.INFO)
+                  -- 刷新显示
+                  close_window()
+                  vim.schedule(function()
+                    M.open_editor(key)
+                  end)
+                end
+              end)
+            else
+              pending_updates = pending_updates - 1
+            end
+          else
+            error_count = error_count + 1
+            vim.notify(string.format("Failed to translate [%s]: %s", target_lang, error or "unknown"), vim.log.levels.ERROR)
+            pending_updates = pending_updates - 1
+            
+            if pending_updates == 0 then
+              vim.notify(string.format("Translation complete: %d success, %d failed", success_count, error_count), vim.log.levels.INFO)
+            end
+          end
+        end
+      end)
     end)
   end, { buffer = buf, nowait = true })
 

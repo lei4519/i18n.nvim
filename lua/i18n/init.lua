@@ -4,8 +4,14 @@ local parser = require("i18n.parser")
 local translator = require("i18n.translator")
 local virt_text = require("i18n.virt_text")
 local editor = require("i18n.editor")
+local completion = require("i18n.completion")
+local checker = require("i18n.checker")
 
 local M = {}
+
+-- 导出模块供外部使用
+M.completion = completion
+M.checker = checker
 
 --- 更新缓冲区的虚拟文本（完整更新）
 --- @param bufnr number 缓冲区号
@@ -283,6 +289,57 @@ function M.setup(opts)
   end, {
     desc = "Refresh i18n virtual text for current buffer",
   })
+  
+  -- 检查翻译缺失
+  vim.api.nvim_create_user_command("I18nCheck", function()
+    local bufnr = vim.api.nvim_get_current_buf()
+    local filepath = vim.api.nvim_buf_get_name(bufnr)
+    
+    if filepath == "" then
+      vim.notify("No file in buffer", vim.log.levels.ERROR)
+      return
+    end
+    
+    checker.generate_report_async(filepath, function(report)
+      -- 在新缓冲区中显示报告
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.cmd("botright split")
+      local win = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_buf(win, buf)
+      vim.api.nvim_win_set_height(win, math.min(20, math.floor(vim.o.lines * 0.4)))
+      
+      vim.wo[win].statusline = "%#Title# I18n Translation Check Report %*"
+      vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
+      vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
+      vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(report, "\n"))
+      vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
+      
+      -- 添加关闭快捷键
+      vim.keymap.set("n", "q", function()
+        if vim.api.nvim_win_is_valid(win) then
+          vim.api.nvim_win_close(win, true)
+        end
+      end, { buffer = buf, nowait = true })
+    end)
+  end, {
+    desc = "Check for missing translations",
+  })
+  
+  -- 显示诊断信息
+  vim.api.nvim_create_user_command("I18nDiagnostics", function()
+    local bufnr = vim.api.nvim_get_current_buf()
+    checker.show_diagnostics(bufnr)
+    vim.notify("I18n diagnostics enabled for current buffer", vim.log.levels.INFO)
+  end, {
+    desc = "Show i18n diagnostics for current buffer",
+  })
+  
+  -- 自动注册 nvim-cmp 源（如果 nvim-cmp 可用）
+  local has_cmp, cmp = pcall(require, "cmp")
+  if has_cmp then
+    cmp.register_source("i18n", completion.cmp)
+  end
 end
 
 return M

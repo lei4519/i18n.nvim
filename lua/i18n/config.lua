@@ -4,14 +4,16 @@ local M = {}
 --- 默认配置
 --- @class I18n.Config
 --- @field enabled boolean 是否启用插件
---- @field i18n_dir string i18n 目录路径（相对于项目根目录）
+--- @field i18n_dir string|string[] i18n 目录路径（相对于项目根目录），支持字符串、数组和glob模式
 --- @field default_language string 默认语言
 --- @field virt_text I18n.VirtTextConfig 虚拟文本配置
 --- @field auto_detect_project boolean 是否自动检测项目根目录
 --- @field filetypes string[] 支持的文件类型
+--- @field translation_patterns string[] 翻译函数调用的匹配模式（正则表达式）
+--- @field openai I18n.OpenAIConfig OpenAI 配置
 local default_config = {
   enabled = true,
-  i18n_dir = "i18n/messages", -- 默认 i18n 目录
+  i18n_dir = "i18n/messages", -- 默认 i18n 目录（支持字符串、数组和glob）
   default_language = "en", -- 默认语言
   virt_text = {
     enabled = true,
@@ -21,7 +23,27 @@ local default_config = {
   },
   auto_detect_project = true, -- 自动检测项目根目录
   filetypes = { "typescript", "javascript", "typescriptreact", "javascriptreact" },
+  -- 翻译函数调用的匹配模式（rg 正则表达式）
+  -- 默认匹配 t("key") 和 t('key')
+  translation_patterns = {
+    [[t\(["']([^"']+)["']\)]],           -- t("key") 或 t('key')
+    [[i18n\.t\(["']([^"']+)["']\)]],     -- i18n.t("key")
+    [[\$t\(["']([^"']+)["']\)]],         -- $t("key") (Vue)
+  },
+  -- OpenAI 配置
+  openai = {
+    enabled = true,                       -- 是否启用 OpenAI 翻译
+    api_key_env = "OPENAI_API_KEY",       -- API Key 的环境变量名
+    model = "gpt-3.5-turbo",              -- 使用的模型
+    api_url = "https://api.openai.com/v1/chat/completions", -- API URL
+  },
 }
+
+--- @class I18n.OpenAIConfig
+--- @field enabled boolean 是否启用 OpenAI 翻译
+--- @field api_key_env string API Key 的环境变量名
+--- @field model string 使用的模型
+--- @field api_url string API URL
 
 --- @class I18n.VirtTextConfig
 --- @field enabled boolean 是否启用虚拟文本
@@ -78,16 +100,65 @@ function M.get_project_root(bufnr)
   return root or vim.fn.getcwd()
 end
 
---- 获取 i18n 目录的完整路径
+--- 展开 glob 模式获取目录列表
+--- @param root string 项目根目录
+--- @param pattern string glob 模式
+--- @return string[] 匹配的目录列表
+local function expand_glob(root, pattern)
+  local full_pattern = root .. "/" .. pattern
+  local matches = vim.fn.glob(full_pattern, false, true)
+  local dirs = {}
+  
+  for _, match in ipairs(matches) do
+    if vim.fn.isdirectory(match) == 1 then
+      table.insert(dirs, match)
+    end
+  end
+  
+  return dirs
+end
+
+--- 获取 i18n 目录的完整路径（返回数组）
+--- @param bufnr number|nil 缓冲区号
+--- @return string[] 目录路径列表
+function M.get_i18n_dirs(bufnr)
+  local root = M.get_project_root(bufnr)
+  if not root then
+    return {}
+  end
+
+  local i18n_dir = M.config.i18n_dir
+  local dirs = {}
+
+  -- 如果是字符串，转换为数组
+  if type(i18n_dir) == "string" then
+    i18n_dir = { i18n_dir }
+  end
+
+  -- 遍历所有配置的目录
+  for _, dir_pattern in ipairs(i18n_dir) do
+    -- 如果包含 glob 模式字符，进行 glob 展开
+    if dir_pattern:match("[*?%[%]]") then
+      local expanded = expand_glob(root, dir_pattern)
+      vim.list_extend(dirs, expanded)
+    else
+      -- 普通路径
+      local full_path = root .. "/" .. dir_pattern
+      if vim.fn.isdirectory(full_path) == 1 then
+        table.insert(dirs, full_path)
+      end
+    end
+  end
+
+  return dirs
+end
+
+--- 获取第一个有效的 i18n 目录（兼容旧接口）
 --- @param bufnr number|nil 缓冲区号
 --- @return string|nil
 function M.get_i18n_dir(bufnr)
-  local root = M.get_project_root(bufnr)
-  if not root then
-    return nil
-  end
-
-  return root .. "/" .. M.config.i18n_dir
+  local dirs = M.get_i18n_dirs(bufnr)
+  return dirs[1]
 end
 
 --- 检查文件类型是否支持

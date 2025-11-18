@@ -222,20 +222,28 @@ function M.delete_translation_async(json_file, key, callback)
 end
 
 --- 获取所有可用的语言和对应的 JSON 文件
---- @param i18n_dir string i18n 目录路径 (例如: "i18n/messages")
+--- @param i18n_dir string|string[] i18n 目录路径 (例如: "i18n/messages" 或多个目录)
 --- @return table<string, string> { [lang] = json_file_path }
 function M.get_available_languages(i18n_dir)
   local result = {}
+  
+  -- 支持单个目录或目录数组
+  local dirs = type(i18n_dir) == "table" and i18n_dir or { i18n_dir }
 
-  -- 使用 glob 查找所有 JSON 文件
-  local pattern = i18n_dir .. "/*.json"
-  local files = vim.fn.glob(pattern, false, true)
+  for _, dir in ipairs(dirs) do
+    -- 使用 glob 查找所有 JSON 文件
+    local pattern = dir .. "/*.json"
+    local files = vim.fn.glob(pattern, false, true)
 
-  for _, file in ipairs(files) do
-    -- 从文件名提取语言
-    -- 例如: i18n/messages/en.json -> en
-    local lang = vim.fn.fnamemodify(file, ":t:r")
-    result[lang] = file
+    for _, file in ipairs(files) do
+      -- 从文件名提取语言
+      -- 例如: i18n/messages/en.json -> en
+      local lang = vim.fn.fnamemodify(file, ":t:r")
+      -- 如果语言已存在，优先使用第一个找到的文件
+      if not result[lang] then
+        result[lang] = file
+      end
+    end
   end
 
   return result
