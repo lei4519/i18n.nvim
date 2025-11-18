@@ -15,8 +15,8 @@ local M = {}
 --- @param filepath string 文件路径
 --- @param callback fun(results: I18n.CheckResult[]) 回调函数
 function M.check_file_async(filepath, callback)
-  local i18n_dirs = config.get_i18n_dirs()
-  if #i18n_dirs == 0 then
+  local i18n_dir = config.get_i18n_dir()
+  if not i18n_dir then
     vim.schedule(function()
       callback({})
     end)
@@ -24,7 +24,7 @@ function M.check_file_async(filepath, callback)
   end
 
   -- 获取所有语言
-  local languages = translator.get_available_languages(i18n_dirs)
+  local languages = translator.get_available_languages(i18n_dir)
   
   if vim.tbl_isempty(languages) then
     vim.schedule(function()
@@ -90,8 +90,8 @@ end
 --- @param filepath string 文件路径
 --- @param callback fun(missing_keys: table[]) 回调函数
 function M.check_default_language_async(filepath, callback)
-  local i18n_dirs = config.get_i18n_dirs()
-  if #i18n_dirs == 0 then
+  local i18n_dir = config.get_i18n_dir()
+  if not i18n_dir then
     vim.schedule(function()
       callback({})
     end)
@@ -99,7 +99,7 @@ function M.check_default_language_async(filepath, callback)
   end
 
   -- 获取默认语言
-  local languages = translator.get_available_languages(i18n_dirs)
+  local languages = translator.get_available_languages(i18n_dir)
   local default_lang = config.config.default_language
   local json_file = languages[default_lang]
 

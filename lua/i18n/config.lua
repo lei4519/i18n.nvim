@@ -100,65 +100,46 @@ function M.get_project_root(bufnr)
   return root or vim.fn.getcwd()
 end
 
---- 展开 glob 模式获取目录列表
---- @param root string 项目根目录
---- @param pattern string glob 模式
---- @return string[] 匹配的目录列表
-local function expand_glob(root, pattern)
-  local full_pattern = root .. "/" .. pattern
-  local matches = vim.fn.glob(full_pattern, false, true)
-  local dirs = {}
-  
-  for _, match in ipairs(matches) do
-    if vim.fn.isdirectory(match) == 1 then
-      table.insert(dirs, match)
-    end
-  end
-  
-  return dirs
-end
-
---- 获取 i18n 目录的完整路径（返回数组）
+--- 获取 i18n 目录的完整路径
+--- 按照配置的顺序依次查找，返回第一个存在的目录
 --- @param bufnr number|nil 缓冲区号
---- @return string[] 目录路径列表
-function M.get_i18n_dirs(bufnr)
+--- @return string|nil 第一个匹配的目录路径
+function M.get_i18n_dir(bufnr)
   local root = M.get_project_root(bufnr)
   if not root then
-    return {}
+    return nil
   end
 
   local i18n_dir = M.config.i18n_dir
-  local dirs = {}
 
-  -- 如果是字符串，转换为数组
+  -- 如果是字符串，直接处理
   if type(i18n_dir) == "string" then
     i18n_dir = { i18n_dir }
   end
 
-  -- 遍历所有配置的目录
+  -- 按顺序查找第一个存在的目录
   for _, dir_pattern in ipairs(i18n_dir) do
     -- 如果包含 glob 模式字符，进行 glob 展开
     if dir_pattern:match("[*?%[%]]") then
-      local expanded = expand_glob(root, dir_pattern)
-      vim.list_extend(dirs, expanded)
+      local full_pattern = root .. "/" .. dir_pattern
+      local matches = vim.fn.glob(full_pattern, false, true)
+      
+      -- 返回第一个匹配的目录
+      for _, match in ipairs(matches) do
+        if vim.fn.isdirectory(match) == 1 then
+          return match
+        end
+      end
     else
       -- 普通路径
       local full_path = root .. "/" .. dir_pattern
       if vim.fn.isdirectory(full_path) == 1 then
-        table.insert(dirs, full_path)
+        return full_path
       end
     end
   end
 
-  return dirs
-end
-
---- 获取第一个有效的 i18n 目录（兼容旧接口）
---- @param bufnr number|nil 缓冲区号
---- @return string|nil
-function M.get_i18n_dir(bufnr)
-  local dirs = M.get_i18n_dirs(bufnr)
-  return dirs[1]
+  return nil
 end
 
 --- 检查文件类型是否支持

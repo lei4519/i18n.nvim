@@ -78,13 +78,13 @@ end
 --- 获取所有可用的 i18n keys（用于补全）
 --- @return table[] 补全项列表
 function M.get_completion_items()
-  local i18n_dirs = config.get_i18n_dirs()
-  if #i18n_dirs == 0 then
+  local i18n_dir = config.get_i18n_dir()
+  if not i18n_dir then
     return {}
   end
 
   -- 获取所有语言
-  local languages = translator.get_available_languages(i18n_dirs)
+  local languages = translator.get_available_languages(i18n_dir)
   local default_lang = config.config.default_language
   local json_file = languages[default_lang]
 

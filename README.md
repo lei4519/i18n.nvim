@@ -70,9 +70,10 @@ use {
 require("i18n").setup({
   enabled = true,                    -- 启用插件
   -- i18n 目录路径（支持字符串、数组、glob）
+  -- 按顺序查找，使用第一个存在的目录
   i18n_dir = "i18n/messages",        -- 单个目录
-  -- i18n_dir = { "i18n/messages", "locales" },  -- 多个目录
-  -- i18n_dir = { "packages/*/i18n" },           -- glob 模式
+  -- i18n_dir = { "i18n/messages", "locales", "translations" },  -- 多个备选目录
+  -- i18n_dir = { "packages/*/i18n" },           -- glob 模式（使用第一个匹配）
   
   default_language = "en",           -- 默认语言
   
@@ -319,22 +320,30 @@ require("i18n").setup({
 
 ### 多目录和 Glob 配置
 
+插件会按照配置的顺序查找目录，使用第一个存在的目录。这样可以让同一个配置适应不同的项目结构：
+
 ```lua
 require("i18n").setup({
-  -- 多个固定目录
+  -- 多个备选目录（按顺序查找第一个存在的）
   i18n_dir = {
-    "i18n/messages",
-    "locales",
-    "translations",
+    "i18n/messages",   -- 先找这个
+    "locales",         -- 没有再找这个
+    "translations",    -- 还没有再找这个
   },
   
-  -- 或使用 glob 模式（适合 monorepo）
+  -- 或使用 glob 模式（使用第一个匹配的）
   i18n_dir = {
-    "packages/*/i18n",
-    "apps/*/locales",
+    "packages/*/i18n",    -- 先尝试这个模式
+    "apps/*/locales",     -- 没有匹配再试这个
+    "src/i18n",           -- 最后的兜底选项
   },
 })
 ```
+
+**使用场景示例**：
+- 团队使用多种项目结构，用一个配置适配所有项目
+- Monorepo 中不同包可能使用不同的目录结构
+- 支持旧项目和新项目的不同约定
 
 ### 自定义翻译函数匹配
 
