@@ -24,14 +24,17 @@ function App() {
           
           <div className="product-card out-of-stock">
             <h3>Unavailable Product</h3>
-            <span>{t("products.out_of_stock")}</span>
+            <span>{t("products.123")}</span>
           </div>
         </section>
       </main>
       
+        <p>{t("common.goodbye") }223{t("common.goodbye")}</p>
       <footer>
-        <p>{t("common.thanks")}</p>
+        <p>{t("common.thanks")} 1 {t("common.goodbye")} 23</p>
         <p>{t("common.goodbye")}</p>
+        <p>{t("common.goodbye")}223</p>
+        <p>{t("common.goodbye")}223 t("common.goodbye")</p>
       </footer>
     </div>
   );

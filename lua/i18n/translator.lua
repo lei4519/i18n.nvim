@@ -5,9 +5,14 @@ local M = {}
 --- @type table<string, table<string, string>>
 local cache = {}
 
+--- 语言列表缓存 { [i18n_dir] = { [lang] = json_file_path } }
+--- @type table<string, table<string, string>>
+local languages_cache = {}
+
 --- 清空缓存
 function M.clear_cache()
   cache = {}
+  languages_cache = {}
 end
 
 --- 清空指定文件的缓存
@@ -72,52 +77,6 @@ function M.get_translation_async(json_file, key, callback)
       callback(translation, nil)
     end)
   end)
-end
-
---- 同步获取翻译（用于测试）
---- @param json_file string JSON 文件路径
---- @param key string i18n key
---- @return string|nil translation
---- @return string|nil error
-function M.get_translation_sync(json_file, key)
-  -- 检查缓存
-  if cache[json_file] and cache[json_file][key] then
-    return cache[json_file][key], nil
-  end
-
-  -- 检查文件是否存在
-  if vim.fn.filereadable(json_file) == 0 then
-    return nil, "File not found: " .. json_file
-  end
-
-  local jq_query = "." .. key
-
-  local args = {
-    "jq",
-    "-r",
-    jq_query,
-    json_file,
-  }
-
-  local obj = vim.system(args, {}):wait()
-
-  if obj.code ~= 0 then
-    return nil, "jq error: " .. (obj.stderr or "unknown")
-  end
-
-  local translation = obj.stdout:gsub("%s+$", "")
-
-  if translation == "null" or translation == "" then
-    return nil, "Key not found: " .. key
-  end
-
-  -- 缓存结果
-  if not cache[json_file] then
-    cache[json_file] = {}
-  end
-  cache[json_file][key] = translation
-
-  return translation, nil
 end
 
 --- 更新翻译（异步）
@@ -221,15 +180,20 @@ function M.delete_translation_async(json_file, key, callback)
   end)
 end
 
---- 获取所有可用的语言和对应的 JSON 文件
+--- 获取所有可用的语言和对应的 JSON 文件（带缓存）
 --- @param i18n_dir string i18n 目录路径 (例如: "i18n/messages")
 --- @return table<string, string> { [lang] = json_file_path }
 function M.get_available_languages(i18n_dir)
-  local result = {}
-  
   if not i18n_dir then
-    return result
+    return {}
   end
+
+  -- 检查缓存
+  if languages_cache[i18n_dir] then
+    return languages_cache[i18n_dir]
+  end
+
+  local result = {}
 
   -- 使用 glob 查找所有 JSON 文件
   local pattern = i18n_dir .. "/*.json"
@@ -241,6 +205,9 @@ function M.get_available_languages(i18n_dir)
     local lang = vim.fn.fnamemodify(file, ":t:r")
     result[lang] = file
   end
+
+  -- 缓存结果
+  languages_cache[i18n_dir] = result
 
   return result
 end

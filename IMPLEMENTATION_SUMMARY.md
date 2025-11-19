@@ -28,7 +28,7 @@
 
 ### 3. ✅ i18n 目录配置支持传入数组配置，并且支持 glob
 
-**修改文件**: 
+**修改文件**:
 - `lua/i18n/config.lua`
 - `lua/i18n/translator.lua`
 
@@ -53,7 +53,7 @@
 
 ### 5. ✅ t() 函数调用的匹配方式支持数组形式的自定义传入
 
-**修改文件**: 
+**修改文件**:
 - `lua/i18n/config.lua`
 - `lua/i18n/parser.lua`
 
@@ -66,7 +66,6 @@
 
 **修改的函数**:
 - `parse_file_async()`
-- `parse_file_sync()`
 - `parse_line_async()`
 
 ### 6. ✅ 支持嵌套 key 的 blink.cmp 自动补全
@@ -103,7 +102,7 @@
 
 **新增文件**: `lua/i18n/openai.lua`
 
-**修改文件**: 
+**修改文件**:
 - `lua/i18n/config.lua` - 新增 OpenAI 配置
 - `lua/i18n/editor.lua` - 添加翻译功能
 
@@ -260,20 +259,20 @@ require("i18n").setup({
   enabled = true,
   i18n_dir = { "packages/*/i18n", "apps/*/locales" },
   default_language = "en",
-  
+
   virt_text = {
     enabled = true,
     max_length = 50,
     prefix = " 💬 ",
     highlight = "Comment",
   },
-  
+
   translation_patterns = {
     [[t\(["']([^"']+)["']\)]],
     [[i18n\.t\(["']([^"']+)["']\)]],
     [[\$t\(["']([^"']+)["']\)]],
   },
-  
+
   openai = {
     enabled = true,
     api_key_env = "OPENAI_API_KEY",

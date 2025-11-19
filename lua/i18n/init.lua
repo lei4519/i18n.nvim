@@ -49,11 +49,39 @@ local function update_buffer_full(bufnr)
 
   -- 解析文件中的 t() 调用
   parser.parse_file_async(filepath, function(results)
-    -- 对每个结果获取翻译并显示
-    for _, result in ipairs(results) do
+    -- 收集所有翻译结果，等待全部完成后再按顺序设置（避免 inline 虚拟文本改变后面的位置）
+    local translations = {}
+    local pending_count = #results
+
+    if pending_count == 0 then
+      return
+    end
+
+    for i, result in ipairs(results) do
       translator.get_translation_async(json_file, result.key, function(translation, _)
-        if translation then
-          virt_text.set_virt_text(bufnr, result.line, result.col, translation)
+        translations[i] = {
+          result = result,
+          translation = translation,
+        }
+
+        pending_count = pending_count - 1
+
+        -- 所有翻译都完成后，按从后往前的顺序设置虚拟文本
+        if pending_count == 0 then
+          -- 按行号和列号排序，从后往前处理
+          table.sort(translations, function(a, b)
+            if a.result.line == b.result.line then
+              return a.result.col > b.result.col
+            end
+            return a.result.line > b.result.line
+          end)
+
+          -- 设置虚拟文本
+          for _, item in ipairs(translations) do
+            if item.translation then
+              virt_text.set_virt_text(bufnr, item.result.line, item.result.col, item.translation)
+            end
+          end
         end
       end)
     end
@@ -97,12 +125,38 @@ local function update_buffer_incremental(bufnr, line_start, line_end)
     -- 清除该行的虚拟文本
     virt_text.clear_line_virt_text(bufnr, line)
 
-    -- 解析该行
-    parser.parse_line_async(filepath, line, function(results)
-      for _, result in ipairs(results) do
+    -- 解析该行（传入 bufnr 以读取未保存的缓冲区内容）
+    parser.parse_line_async(bufnr, line, function(results)
+      -- 收集所有翻译结果，等待全部完成后再按顺序设置
+      local translations = {}
+      local pending_count = #results
+
+      if pending_count == 0 then
+        return
+      end
+
+      for i, result in ipairs(results) do
         translator.get_translation_async(json_file, result.key, function(translation, _)
-          if translation then
-            virt_text.set_virt_text(bufnr, result.line, result.col, translation)
+          translations[i] = {
+            result = result,
+            translation = translation,
+          }
+
+          pending_count = pending_count - 1
+
+          -- 所有翻译都完成后，按从后往前的顺序设置虚拟文本
+          if pending_count == 0 then
+            -- 按列号排序，从后往前处理（同一行）
+            table.sort(translations, function(a, b)
+              return a.result.col > b.result.col
+            end)
+
+            -- 设置虚拟文本
+            for _, item in ipairs(translations) do
+              if item.translation then
+                virt_text.set_virt_text(bufnr, item.result.line, item.result.col, item.translation)
+              end
+            end
           end
         end)
       end
@@ -122,16 +176,10 @@ function M.setup(opts)
   -- 创建自动命令组
   local group = vim.api.nvim_create_augroup("i18n", { clear = true })
 
-  -- BufEnter: 完整更新
-  vim.api.nvim_create_autocmd("BufEnter", {
-    group = group,
-    pattern = "*.{ts,js,tsx,jsx}",
-    callback = function(ev)
-      update_buffer_full(ev.buf)
-    end,
-  })
+  -- 跟踪已初始化的缓冲区
+  local initialized_buffers = {}
 
-  -- TextChanged: 增量更新
+  -- 增量更新: 使用 buf_attach 监听文本变化
   -- 使用 debounce 避免频繁更新
   local timer = vim.uv.new_timer()
   local pending_updates = {}
@@ -147,50 +195,109 @@ function M.setup(opts)
     pending_updates = {}
   end
 
-  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+  local function schedule_update(bufnr, line_start, line_end)
+    -- 添加到待更新列表
+    if not pending_updates[bufnr] then
+      pending_updates[bufnr] = {}
+    end
+
+    -- 添加变化的行范围
+    for line = line_start, line_end do
+      table.insert(pending_updates[bufnr], line)
+    end
+
+    -- 重启定时器（debounce）
+    timer:stop()
+    timer:start(
+      500, -- 500ms 延迟
+      0,
+      vim.schedule_wrap(process_pending_updates)
+    )
+  end
+
+  -- BufEnter: 首次打开时完整更新，并附加监听器
+  vim.api.nvim_create_autocmd("BufEnter", {
     group = group,
     pattern = "*.{ts,js,tsx,jsx}",
     callback = function(ev)
       local bufnr = ev.buf
 
-      -- 获取当前光标行
-      local line = vim.api.nvim_win_get_cursor(0)[1]
-
-      -- 添加到待更新列表
-      if not pending_updates[bufnr] then
-        pending_updates[bufnr] = {}
+      -- 只在首次进入缓冲区时进行完整更新
+      if not initialized_buffers[bufnr] then
+        initialized_buffers[bufnr] = true
+        update_buffer_full(bufnr)
       end
-      table.insert(pending_updates[bufnr], line)
 
-      -- 重启定时器（debounce）
-      timer:stop()
-      timer:start(
-        500, -- 500ms 延迟
-        0,
-        vim.schedule_wrap(process_pending_updates)
-      )
+      -- 为缓冲区附加监听器（避免重复附加）
+      if not vim.b[bufnr].i18n_attached then
+        vim.b[bufnr].i18n_attached = true
+
+        -- 附加到缓冲区以监听变化
+        vim.api.nvim_buf_attach(bufnr, false, {
+          on_lines = function(_, buf, _, first_line, old_last_line, new_last_line)
+            if not vim.api.nvim_buf_is_valid(buf) then
+              return false
+            end
+
+            -- 将 0-based 转为 1-based
+            local line_start = first_line + 1
+
+            -- 检测是否有行被删除
+            if new_last_line < old_last_line then
+              -- 有行被删除
+              -- extmarks 会自动随行删除而移除，但需要清理我们的跟踪表
+              -- 清理被删除行的虚拟文本（使用 namespace API 更可靠）
+              pcall(vim.api.nvim_buf_clear_namespace, buf, virt_text.get_namespace(),
+                    first_line, old_last_line)
+            end
+
+            -- 计算需要更新的行范围（使用变化后的行号）
+            local line_end = new_last_line  -- new_last_line 是变化后的最后一行的下一行 (0-based)
+
+            -- 确保至少更新一行
+            if line_end <= first_line then
+              line_end = first_line + 1
+            end
+
+            -- 调度更新（转为 1-based）
+            schedule_update(buf, line_start, line_end)
+
+            return false  -- 不detach
+          end,
+        })
+      end
+    end,
+  })
+
+  -- BufDelete: 清理缓冲区初始化标记
+  vim.api.nvim_create_autocmd("BufDelete", {
+    group = group,
+    callback = function(ev)
+      initialized_buffers[ev.buf] = nil
+      vim.b[ev.buf].i18n_attached = nil
+      vim.api.nvim_buf_delete(ev.buf, { force = true })
     end,
   })
 
   -- 当 i18n 文件变化时，清除缓存并刷新所有缓冲区
-  vim.api.nvim_create_autocmd("BufWritePost", {
-    group = group,
-    pattern = "*/i18n/messages/*.json",
-    callback = function(_)
-      -- 清除翻译缓存
-      translator.clear_cache()
+  -- vim.api.nvim_create_autocmd("BufWritePost", {
+  --   group = group,
+  --   pattern = "*/i18n/messages/*.json",
+  --   callback = function(_)
+  --     -- 清除翻译缓存
+  --     translator.clear_cache()
 
-      -- 刷新所有打开的支持文件类型的缓冲区
-      for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
-          local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
-          if config.is_supported_filetype(filetype) then
-            update_buffer_full(bufnr)
-          end
-        end
-      end
-    end,
-  })
+  --     -- 刷新所有打开的支持文件类型的缓冲区
+  --     for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+  --       if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
+  --         local filetype = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
+  --         if config.is_supported_filetype(filetype) then
+  --           update_buffer_full(bufnr)
+  --         end
+  --       end
+  --     end
+  --   end,
+  -- })
 
   -- 用户命令
   -- 切换虚拟文本显示
@@ -282,39 +389,42 @@ function M.setup(opts)
   })
 
   -- 刷新当前缓冲区
-  vim.api.nvim_create_user_command("I18nRefresh", function()
+vim.api.nvim_create_user_command("I18nRefresh", function()
     translator.clear_cache()
     update_buffer_full(vim.api.nvim_get_current_buf())
     vim.notify("I18n virtual text refreshed", vim.log.levels.INFO)
-  end, {
-    desc = "Refresh i18n virtual text for current buffer",
-  })
-  
+end, {
+    desc = "Refresh i18n virtual text for current buffer"
+})
+
+
+
   -- 检查翻译缺失
   vim.api.nvim_create_user_command("I18nCheck", function()
     local bufnr = vim.api.nvim_get_current_buf()
     local filepath = vim.api.nvim_buf_get_name(bufnr)
-    
+
     if filepath == "" then
       vim.notify("No file in buffer", vim.log.levels.ERROR)
       return
     end
-    
+
     checker.generate_report_async(filepath, function(report)
       -- 在新缓冲区中显示报告
       local buf = vim.api.nvim_create_buf(false, true)
-      vim.cmd("botright split")
+vim.cmd("botright vsplit")
+
       local win = vim.api.nvim_get_current_win()
       vim.api.nvim_win_set_buf(win, buf)
       vim.api.nvim_win_set_height(win, math.min(20, math.floor(vim.o.lines * 0.4)))
-      
+
       vim.wo[win].statusline = "%#Title# I18n Translation Check Report %*"
       vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
       vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
       vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(report, "\n"))
       vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
-      
+
       -- 添加关闭快捷键
       vim.keymap.set("n", "q", function()
         if vim.api.nvim_win_is_valid(win) then
@@ -325,21 +435,39 @@ function M.setup(opts)
   end, {
     desc = "Check for missing translations",
   })
-  
+
   -- 显示诊断信息
-  vim.api.nvim_create_user_command("I18nDiagnostics", function()
-    local bufnr = vim.api.nvim_get_current_buf()
-    checker.show_diagnostics(bufnr)
-    vim.notify("I18n diagnostics enabled for current buffer", vim.log.levels.INFO)
-  end, {
-    desc = "Show i18n diagnostics for current buffer",
-  })
-  
+-- vim.api.nvim_create_user_command("I18nDiagnostics", function()
+--   local bufnr = vim.api.nvim_get_current_buf()
+--   checker.show_diagnostics(bufnr)
+--   vim.notify("I18n diagnostics enabled for current buffer", vim.log.levels.INFO)
+-- end, {
+--   desc = "Show i18n diagnostics for current buffer",
+-- })
+
+
+-- 清空所有缓存
+vim.api.nvim_create_user_command("I18nClearCache", function()
+    -- 清空配置缓存（项目根目录和 i18n 目录缓存）
+    config.clear_all_cache()
+    -- 清空翻译缓存和语言列表缓存
+    translator.clear_cache()
+    vim.notify("All i18n caches cleared", vim.log.levels.INFO)
+end, {
+    desc = "Clear all i18n caches (project root, i18n dir, translations, languages)"
+})
+
   -- 自动注册 nvim-cmp 源（如果 nvim-cmp 可用）
-  local has_cmp, cmp = pcall(require, "cmp")
-  if has_cmp then
-    cmp.register_source("i18n", completion.cmp)
-  end
+  -- local has_cmp, cmp = pcall(require, "cmp")
+  -- if has_cmp then
+  --   cmp.register_source("i18n", completion.cmp)
+  -- end
+
+  -- -- 自动注册 blink.cmp 源（如果 blink.cmp 可用）
+  -- local has_blink_cmp, blink_cmp = pcall(require, "blink.cmp")
+  -- if has_blink_cmp then
+  --   blink_cmp.register_source("i18n", completion.blink)
+  -- end
 end
 
 return M
