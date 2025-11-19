@@ -16,7 +16,9 @@ local i18n_dir_cache = {}
 --- @field virt_text I18n.VirtTextConfig 虚拟文本配置
 --- @field auto_detect_project boolean 是否自动检测项目根目录
 --- @field filetypes string[] 支持的文件类型
---- @field translation_patterns string[] 翻译函数调用的匹配模式（正则表达式）
+--- @field debounce_delay number 增量更新的防抖延迟（毫秒）
+--- @field translation_method_names string[] 翻译函数名称列表
+--- @field lang_names table<string, string>|nil 语言代码到全名的映射（用于 AI 翻译），nil 表示使用默认值
 --- @field openai I18n.OpenAIConfig OpenAI 配置
 local default_config = {
   enabled = true,
@@ -30,13 +32,17 @@ local default_config = {
   },
   auto_detect_project = true, -- 自动检测项目根目录
   filetypes = { "typescript", "javascript", "typescriptreact", "javascriptreact" },
-  -- 翻译函数调用的匹配模式（rg 正则表达式）
+  debounce_delay = 1000, -- 增量更新的防抖延迟（毫秒），默认 1000ms
+  -- 翻译函数名称列表（只需要函数名，插件内部会匹配 functionName("key") 和 functionName('key')）
   -- 默认匹配 t("key") 和 t('key')
-  translation_patterns = {
-    [[t\(["']([^"']+)["']\)]], -- t("key") 或 t('key')
-    -- [[i18n\.t\(["']([^"']+)["']\)]],     -- i18n.t("key")
-    -- [[\$t\(["']([^"']+)["']\)]],         -- $t("key") (Vue)
+  translation_method_names = {
+    "t",        -- t("key")
+    -- "i18n.t",   -- i18n.t("key")
+    -- "$t",       -- $t("key") (Vue)
   },
+  -- 语言代码到全名的映射（用于 AI 翻译）
+  -- nil 表示使用内置的默认语言列表，也可以传入自定义表来覆盖或扩展
+  lang_names = nil,
   -- OpenAI 配置
   openai = {
     enabled = true,                                         -- 是否启用 OpenAI 翻译

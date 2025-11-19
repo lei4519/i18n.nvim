@@ -34,9 +34,9 @@ local function extract_all_keys(json_file)
   return keys
 end
 
---- 从 JSON 文件中提取所有的 keys（支持嵌套，使用递归方式）
+--- 从 JSON 文件中提取所有的 keys 和 values（支持嵌套，使用递归方式）
 --- @param json_file string JSON 文件路径
---- @return string[] 所有的 keys
+--- @return table<string, string> 所有的 keys 映射到对应的 value { [key] = value }
 local function extract_keys_recursive(json_file)
   -- 读取并解析 JSON 文件
   local f = io.open(json_file, "r")
@@ -54,7 +54,7 @@ local function extract_keys_recursive(json_file)
 
   local keys = {}
 
-  --- 递归提取 keys
+  --- 递归提取 keys 和 values
   --- @param obj table JSON 对象
   --- @param prefix string 前缀
   local function extract(obj, prefix)
@@ -64,8 +64,8 @@ local function extract_keys_recursive(json_file)
         -- 递归处理嵌套对象
         extract(v, key)
       else
-        -- 叶子节点
-        table.insert(keys, key)
+        -- 叶子节点，保存 key -> value 映射
+        keys[key] = tostring(v)
       end
     end
   end
@@ -76,11 +76,12 @@ local function extract_keys_recursive(json_file)
 end
 
 --- 获取所有可用的 i18n keys（用于补全）
---- @return table[] 补全项列表
+--- @return table[] items 补全项列表
+--- @return table<string, string> key_values key到value的映射
 function M.get_completion_items()
   local i18n_dir = config.get_i18n_dir()
   if not i18n_dir then
-    return {}
+    return {}, {}
   end
 
   -- 获取所有语言
@@ -97,27 +98,44 @@ function M.get_completion_items()
   end
 
   if not json_file then
-    return {}
+    return {}, {}
   end
 
-  -- 提取所有 keys
-  local keys = extract_keys_recursive(json_file)
+  -- 提取所有 keys 和 values
+  local key_values = extract_keys_recursive(json_file)
 
   -- 转换为补全项格式
   local items = {}
-  for _, key in ipairs(keys) do
+  for key, value in pairs(key_values) do
+    -- 截断过长的值
+    local display_value = value
+    local max_length = config.config.virt_text.max_length or 50
+    if max_length > 0 and #display_value > max_length then
+      display_value = display_value:sub(1, max_length) .. "..."
+    end
+
     table.insert(items, {
       label = key,
+      insertText = key,                -- 插入 key
+      filterText = key,                -- 使用 key 进行过滤
       kind = vim.lsp.protocol.CompletionItemKind.Constant,
-      detail = "i18n key",
+      detail = key,                    -- 详细信息显示 key
       documentation = {
         kind = "markdown",
-        value = string.format("i18n key: `%s`", key),
+        value = string.format("**Key:** `%s`\n\n**Value:** %s", key, value),
       },
     })
   end
 
-  return items
+  return items, key_values
+end
+
+--- 转义特殊字符用于 Lua 模式匹配
+--- @param str string 要转义的字符串
+--- @return string 转义后的字符串
+local function escape_pattern(str)
+  -- 转义 Lua 模式中的特殊字符
+  return str:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
 end
 
 --- 获取当前光标位置的补全上下文
@@ -126,23 +144,40 @@ end
 --- @return string|nil prefix 补全前缀
 --- @return number|nil start_col 补全起始列号
 local function get_completion_context(line, col)
-  local patterns = config.config.translation_patterns or { [[t\(["']([^"']+)["']\)]] }
+  local method_names = config.config.translation_method_names or { "t" }
+  local before_cursor = line:sub(1, col - 1)
 
   -- 检查是否在翻译函数调用中
-  for _, pattern in ipairs(patterns) do
-    -- 简化的检查：查找 t(" 或 t(' 或 i18n.t(" 等
-    local lua_pattern = pattern:gsub("\\%(", "%("):gsub("\\%)", "%)"):gsub("\\%[", "%["):gsub("\\%]", "%]")
-    -- 提取函数名部分（如 t、i18n.t、$t）
-    local func_name = pattern:match("^([^\\]+)")
+  for _, method_name in ipairs(method_names) do
+    local escaped_name = escape_pattern(method_name)
 
-    -- 查找最近的函数调用
-    local before_cursor = line:sub(1, col - 1)
-    local start_pos, end_pos, quote = before_cursor:match("()" .. func_name .. "%([\"']()")
-    
-    if start_pos then
-      -- 在翻译函数调用中
-      local prefix = before_cursor:sub(end_pos)
-      return prefix, end_pos
+    -- 尝试匹配双引号和单引号两种情况
+    -- 匹配 functionName(" 或 functionName('
+    for _, quote_pattern in ipairs({ '("', "('" }) do
+      local pattern = escaped_name .. quote_pattern:gsub("([%(%)%'%\"])", "%%%1")
+      local start_pos, end_pos = before_cursor:find(pattern)
+
+      -- 查找最后一个匹配（最接近光标的）
+      while start_pos do
+        local next_start, next_end = before_cursor:find(pattern, end_pos + 1)
+        if not next_start then
+          break
+        end
+        start_pos, end_pos = next_start, next_end
+      end
+
+      if start_pos then
+        -- 检查是否已经闭合（包含了右引号和右括号）
+        local after_match = before_cursor:sub(end_pos + 1)
+        local quote_char = quote_pattern:sub(2, 2) -- " 或 '
+        local has_closing = after_match:match(quote_char .. "%)") ~= nil
+
+        if not has_closing then
+          -- 在翻译函数调用中，且尚未闭合
+          local prefix = after_match
+          return prefix, end_pos + 1
+        end
+      end
     end
   end
 
@@ -194,14 +229,58 @@ function M.blink.get_completions(self, ctx, callback)
     return
   end
 
-  -- 获取补全项
-  local items = M.get_completion_items()
+  -- 获取补全项和 key-value 映射
+  local items, key_values = M.get_completion_items()
 
-  -- 过滤匹配的项
+  -- 根据前缀过滤并提取下一级字段
   local filtered = {}
+  local seen = {}  -- 用于去重
+
   for _, item in ipairs(items) do
-    if vim.startswith(item.label, prefix) then
-      table.insert(filtered, item)
+    local key = item.filterText or item.label
+
+    -- 检查是否匹配前缀
+    if vim.startswith(key, prefix) then
+      local remainder = key:sub(#prefix + 1)  -- 去掉前缀部分
+
+      -- 提取下一级字段（第一个点之前的部分，或者全部如果没有点）
+      local next_level = remainder:match("^([^.]+)")
+
+      if next_level and not seen[next_level] then
+        seen[next_level] = true
+
+        -- 构建完整的 key
+        local full_key = prefix .. next_level
+
+        -- 检查是否是叶子节点（直接从 key_values 查找）
+        local leaf_value = key_values[full_key]
+        local is_leaf = leaf_value ~= nil
+
+        -- 截断过长的值
+        local display_value = leaf_value
+        if display_value then
+          local max_length = config.config.virt_text.max_length or 50
+          if max_length > 0 and #display_value > max_length then
+            display_value = display_value:sub(1, max_length) .. "..."
+          end
+        end
+
+        table.insert(filtered, {
+          label = next_level,           -- 只显示下一级字段名
+          insertText = full_key,         -- 插入完整路径
+          filterText = full_key,         -- 使用完整路径过滤
+          kind = is_leaf and vim.lsp.protocol.CompletionItemKind.Constant
+                          or vim.lsp.protocol.CompletionItemKind.Module,
+          detail = is_leaf and display_value or (full_key .. ".*"),  -- 叶子节点显示值，否则显示有子项
+          documentation = is_leaf and {
+            kind = "markdown",
+            value = string.format("**Key:** `%s`\n\n**Value:** %s", full_key, leaf_value),
+          } or {
+            kind = "markdown",
+            value = string.format("**Key:** `%s`\n\n*Has nested keys*", full_key),
+          },
+        })
+      end
     end
   end
 
@@ -248,14 +327,58 @@ function M.cmp:complete(params, callback)
     return
   end
 
-  -- 获取补全项
-  local items = M.get_completion_items()
+  -- 获取补全项和 key-value 映射
+  local items, key_values = M.get_completion_items()
 
-  -- 过滤匹配的项
+  -- 根据前缀过滤并提取下一级字段
   local filtered = {}
+  local seen = {}  -- 用于去重
+
   for _, item in ipairs(items) do
-    if vim.startswith(item.label, prefix) then
-      table.insert(filtered, item)
+    local key = item.filterText or item.label
+
+    -- 检查是否匹配前缀
+    if vim.startswith(key, prefix) then
+      local remainder = key:sub(#prefix + 1)  -- 去掉前缀部分
+
+      -- 提取下一级字段（第一个点之前的部分，或者全部如果没有点）
+      local next_level = remainder:match("^([^.]+)")
+
+      if next_level and not seen[next_level] then
+        seen[next_level] = true
+
+        -- 构建完整的 key
+        local full_key = prefix .. next_level
+
+        -- 检查是否是叶子节点（直接从 key_values 查找）
+        local leaf_value = key_values[full_key]
+        local is_leaf = leaf_value ~= nil
+
+        -- 截断过长的值
+        local display_value = leaf_value
+        if display_value then
+          local max_length = config.config.virt_text.max_length or 50
+          if max_length > 0 and #display_value > max_length then
+            display_value = display_value:sub(1, max_length) .. "..."
+          end
+        end
+
+        table.insert(filtered, {
+          label = next_level,           -- 只显示下一级字段名
+          insertText = full_key,         -- 插入完整路径
+          filterText = full_key,         -- 使用完整路径过滤
+          kind = is_leaf and vim.lsp.protocol.CompletionItemKind.Constant
+                          or vim.lsp.protocol.CompletionItemKind.Module,
+          detail = is_leaf and display_value or (full_key .. ".*"),  -- 叶子节点显示值，否则显示有子项
+          documentation = is_leaf and {
+            kind = "markdown",
+            value = string.format("**Key:** `%s`\n\n**Value:** %s", full_key, leaf_value),
+          } or {
+            kind = "markdown",
+            value = string.format("**Key:** `%s`\n\n*Has nested keys*", full_key),
+          },
+        })
+      end
     end
   end
 

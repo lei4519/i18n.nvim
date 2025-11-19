@@ -209,7 +209,7 @@ function M.setup(opts)
     -- 重启定时器（debounce）
     timer:stop()
     timer:start(
-      500, -- 500ms 延迟
+      config.config.debounce_delay, -- 使用配置的延迟时间
       0,
       vim.schedule_wrap(process_pending_updates)
     )
@@ -457,17 +457,23 @@ end, {
     desc = "Clear all i18n caches (project root, i18n dir, translations, languages)"
 })
 
-  -- 自动注册 nvim-cmp 源（如果 nvim-cmp 可用）
-  -- local has_cmp, cmp = pcall(require, "cmp")
-  -- if has_cmp then
-  --   cmp.register_source("i18n", completion.cmp)
-  -- end
+-- 补全功能暂未启用
 
-  -- -- 自动注册 blink.cmp 源（如果 blink.cmp 可用）
-  -- local has_blink_cmp, blink_cmp = pcall(require, "blink.cmp")
-  -- if has_blink_cmp then
-  --   blink_cmp.register_source("i18n", completion.blink)
-  -- end
+  -- 自动注册 nvim-cmp 源（如果 nvim-cmp 可用）
+-- local has_cmp, cmp = pcall(require, "cmp")
+-- if has_cmp then
+--   cmp.register_source("i18n", completion.cmp)
+-- end
+
+
+-- 注意：blink.cmp 需要在用户配置中手动添加源，不支持动态注册
+-- 请参考 README 中的 blink.cmp 配置说明
+
+
+
+
+
+
 end
 
 return M

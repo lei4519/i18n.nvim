@@ -1,4 +1,4 @@
---- 使用 rg 解析文件中的 t() 调用
+--- 使用纯 Lua 正则匹配解析文件中的翻译函数调用
 local M = {}
 
 --- 解析结果项
@@ -8,51 +8,68 @@ local M = {}
 --- @field col number 列号 (1-based)
 --- @field text string 匹配的文本
 
---- 使用 Lua 模式解析文本内容中的 t() 调用
+--- 转义特殊字符用于 Lua 模式匹配
+--- @param str string 要转义的字符串
+--- @return string 转义后的字符串
+local function escape_pattern(str)
+  -- 转义 Lua 模式中的特殊字符
+  return str:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
+end
+
+--- 根据函数名生成 Lua 匹配模式
+--- @param method_name string 函数名（如 "t", "i18n.t", "$t"）
+--- @return string[] 双引号和单引号的匹配模式
+local function generate_patterns(method_name)
+  local escaped_name = escape_pattern(method_name)
+  return {
+    escaped_name .. '%("([^"]+)"%)',  -- 匹配 functionName("key")
+    escaped_name .. "%('([^']+)'%)",  -- 匹配 functionName('key')
+  }
+end
+
+--- 使用 Lua 模式解析文本内容中的翻译函数调用
 --- @param text string 文本内容
 --- @param line_number number|nil 行号 (1-based)，如果为 nil 则从 1 开始
 --- @return I18n.ParseResult[] 解析结果
 local function parse_text_content(text, line_number)
   local config = require("i18n.config")
-  -- TODO: 支持多种模式
-  -- local patterns = config.config.translation_patterns or { [[t\(["']([^"']+)["']\)]] }
+  local method_names = config.config.translation_method_names or { "t" }
 
   line_number = line_number or 1
   local results = {}
 
-  -- 定义要匹配的模式列表
-  local patterns = {
-    't%("([^"]+)"%)',  -- 匹配 t("key")
-    "t%('([^']+)'%)",  -- 匹配 t('key')
-  }
+  -- 为每个配置的函数名生成匹配模式
+  for _, method_name in ipairs(method_names) do
+    local patterns = generate_patterns(method_name)
+    
+    -- 遍历每个模式（双引号和单引号）
+    for _, pattern in ipairs(patterns) do
+      local pos = 1
+      while true do
+        -- string.find 返回: start_pos, end_pos, captured_groups...
+        local start_pos, end_pos, key = text:find(pattern, pos)
+        if not start_pos then
+          break
+        end
 
-  -- 遍历每个模式
-  for _, pattern in ipairs(patterns) do
-    local pos = 1
-    while true do
-      -- string.find 返回: start_pos, end_pos, captured_groups...
-      local start_pos, end_pos, key = text:find(pattern, pos)
-      if not start_pos then
-        break
+        -- 添加结果，col 设置为右括号的位置（inline 模式会在该位置之前插入）
+        table.insert(results, {
+          key = key,
+          line = line_number,
+          col = end_pos,  -- 在 functionName("key") 的 ) 之前显示虚拟文本
+          text = text:sub(start_pos, end_pos),
+        })
+
+        -- 继续从匹配结束的位置之后查找
+        pos = end_pos + 1
       end
-
-      -- 添加结果，col 设置为右括号的位置（inline 模式会在该位置之前插入）
-      table.insert(results, {
-        key = key,
-        line = line_number,
-        col = end_pos,  -- 在 t("key") 的 ) 之前显示虚拟文本
-        text = text:sub(start_pos, end_pos),
-      })
-
-      -- 继续从匹配结束的位置之后查找
-      pos = end_pos + 1
     end
   end
 
   return results
 end
 
---- 解析文件或文本内容中的 t() 调用
+--- 解析文件或文本内容中的翻译函数调用
 --- @param input string 文件路径或文本内容
 --- @param opts table|nil 选项：{ is_text: boolean, line_number: number }
 --- @param callback fun(results: I18n.ParseResult[]) 回调函数
@@ -76,71 +93,52 @@ function M.parse_file_async(input, opts, callback)
     return
   end
 
-  -- 否则使用 rg 解析文件
+  -- 否则异步读取文件内容，然后使用 Lua 模式匹配
   local filepath = input
-  local config = require("i18n.config")
-  local patterns = config.config.translation_patterns or { [[t\(["']([^"']+)["']\)]] }
+  
+  -- 使用 vim.uv 异步读取文件
+  vim.uv.fs_open(filepath, "r", 438, function(err_open, fd)
+    if err_open or not fd then
+      vim.schedule(function()
+        callback({})
+      end)
+      return
+    end
 
-  -- 使用 rg 搜索所有配置的模式
-  -- -n: 显示行号
-  -- -o: 只显示匹配的部分
-  -- --column: 显示列号
-  -- --json: JSON 格式输出
-  -- 构建多模式匹配：pattern1|pattern2|pattern3
-  local combined_pattern = table.concat(patterns, "|")
-
-  local args = {
-    "rg",
-    "--json",
-    "-n",
-    "--column",
-    combined_pattern,
-    filepath,
-  }
-
-  vim.system(args, {}, function(obj)
-    vim.schedule(function()
-      if obj.code ~= 0 then
-        -- rg 返回 1 表示没有匹配，这是正常的
-        if obj.code == 1 then
+    vim.uv.fs_fstat(fd, function(err_fstat, stat)
+      if err_fstat or not stat then
+        vim.uv.fs_close(fd)
+        vim.schedule(function()
           callback({})
-        else
-          vim.notify("rg error: " .. (obj.stderr or "unknown"), vim.log.levels.ERROR)
-          callback({})
-        end
+        end)
         return
       end
 
-      local results = {}
-      local lines = vim.split(obj.stdout or "", "\n", { plain = true })
+      vim.uv.fs_read(fd, stat.size, 0, function(err_read, data)
+        vim.uv.fs_close(fd)
+        
+        if err_read or not data then
+          vim.schedule(function()
+            callback({})
+          end)
+          return
+        end
 
-      for _, line in ipairs(lines) do
-        if line ~= "" then
-          local ok, data = pcall(vim.json.decode, line)
-          if ok and data.type == "match" then
-            local match_data = data.data
-            -- 尝试从匹配文本中提取 key（尝试所有模式）
+        -- 解析文件内容
+        local lines = vim.split(data, "\n", { plain = true })
+        local all_results = {}
 
-            for _, submatch in ipairs(match_data.submatches) do
-              local text = submatch.match.text
-              -- 这里只需要从 `(` 开始，slice 掉 `("` 和 `")` 即可，因为 key 就是括号内的内容
-              local paren_pos = text:find("%(")
-              local key = paren_pos and text:sub(paren_pos + 2, -3) or nil
-
-              if key then
-                table.insert(results, {
-                  key = key,
-                  line = match_data.line_number,
-                  col = submatch['end'] - 1,  -- 在 t("key") 的 ) 之前显示虚拟文本
-                  text = text:gsub("^%s+", ""),  -- 去除前导空格
-                })
-              end
-            end
+        for line_num, line_text in ipairs(lines) do
+          local line_results = parse_text_content(line_text, line_num)
+          for _, result in ipairs(line_results) do
+            table.insert(all_results, result)
           end
         end
-      end
 
-      callback(results)
+        vim.schedule(function()
+          callback(all_results)
+        end)
+      end)
     end)
   end)
 end
