@@ -40,18 +40,7 @@ sudo apt install jq  # Ubuntu/Debian
     { "<leader>ic", "<cmd>I18nCheck<cr>", desc = "Check i18n translations" },
     { "<leader>iC", "<cmd>I18nClearCache<cr>", desc = "Clear i18n cache" },
   },
-  config = function()
-    require("i18n").setup({
-      i18n_dir = "i18n/messages",  -- i18n 目录路径
-      default_language = "en",      -- 默认语言
-      virt_text = {
-        enabled = true,
-        max_length = 50,           -- 最大显示长度
-        prefix = " 💬 ",           -- 前缀图标
-        highlight = "Comment",     -- 高亮组
-      },
-    })
-  end,
+  opts = {}
 }
 ```
 
