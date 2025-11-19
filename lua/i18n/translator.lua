@@ -226,6 +226,10 @@ end
 --- @return table<string, string> { [lang] = json_file_path }
 function M.get_available_languages(i18n_dir)
   local result = {}
+  
+  if not i18n_dir then
+    return result
+  end
 
   -- 使用 glob 查找所有 JSON 文件
   local pattern = i18n_dir .. "/*.json"

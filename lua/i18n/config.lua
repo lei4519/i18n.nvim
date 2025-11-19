@@ -4,14 +4,16 @@ local M = {}
 --- 默认配置
 --- @class I18n.Config
 --- @field enabled boolean 是否启用插件
---- @field i18n_dir string i18n 目录路径（相对于项目根目录）
+--- @field i18n_dir string|string[] i18n 目录路径（相对于项目根目录），支持字符串、数组和glob模式
 --- @field default_language string 默认语言
 --- @field virt_text I18n.VirtTextConfig 虚拟文本配置
 --- @field auto_detect_project boolean 是否自动检测项目根目录
 --- @field filetypes string[] 支持的文件类型
+--- @field translation_patterns string[] 翻译函数调用的匹配模式（正则表达式）
+--- @field openai I18n.OpenAIConfig OpenAI 配置
 local default_config = {
   enabled = true,
-  i18n_dir = "i18n/messages", -- 默认 i18n 目录
+  i18n_dir = "i18n/messages", -- 默认 i18n 目录（支持字符串、数组和glob）
   default_language = "en", -- 默认语言
   virt_text = {
     enabled = true,
@@ -21,7 +23,27 @@ local default_config = {
   },
   auto_detect_project = true, -- 自动检测项目根目录
   filetypes = { "typescript", "javascript", "typescriptreact", "javascriptreact" },
+  -- 翻译函数调用的匹配模式（rg 正则表达式）
+  -- 默认匹配 t("key") 和 t('key')
+  translation_patterns = {
+    [[t\(["']([^"']+)["']\)]],           -- t("key") 或 t('key')
+    [[i18n\.t\(["']([^"']+)["']\)]],     -- i18n.t("key")
+    [[\$t\(["']([^"']+)["']\)]],         -- $t("key") (Vue)
+  },
+  -- OpenAI 配置
+  openai = {
+    enabled = true,                       -- 是否启用 OpenAI 翻译
+    api_key_env = "OPENAI_API_KEY",       -- API Key 的环境变量名
+    model = "gpt-3.5-turbo",              -- 使用的模型
+    api_url = "https://api.openai.com/v1/chat/completions", -- API URL
+  },
 }
+
+--- @class I18n.OpenAIConfig
+--- @field enabled boolean 是否启用 OpenAI 翻译
+--- @field api_key_env string API Key 的环境变量名
+--- @field model string 使用的模型
+--- @field api_url string API URL
 
 --- @class I18n.VirtTextConfig
 --- @field enabled boolean 是否启用虚拟文本
@@ -79,15 +101,45 @@ function M.get_project_root(bufnr)
 end
 
 --- 获取 i18n 目录的完整路径
+--- 按照配置的顺序依次查找，返回第一个存在的目录
 --- @param bufnr number|nil 缓冲区号
---- @return string|nil
+--- @return string|nil 第一个匹配的目录路径
 function M.get_i18n_dir(bufnr)
   local root = M.get_project_root(bufnr)
   if not root then
     return nil
   end
 
-  return root .. "/" .. M.config.i18n_dir
+  local i18n_dir = M.config.i18n_dir
+
+  -- 如果是字符串，直接处理
+  if type(i18n_dir) == "string" then
+    i18n_dir = { i18n_dir }
+  end
+
+  -- 按顺序查找第一个存在的目录
+  for _, dir_pattern in ipairs(i18n_dir) do
+    -- 如果包含 glob 模式字符，进行 glob 展开
+    if dir_pattern:match("[*?%[%]]") then
+      local full_pattern = root .. "/" .. dir_pattern
+      local matches = vim.fn.glob(full_pattern, false, true)
+      
+      -- 返回第一个匹配的目录
+      for _, match in ipairs(matches) do
+        if vim.fn.isdirectory(match) == 1 then
+          return match
+        end
+      end
+    else
+      -- 普通路径
+      local full_path = root .. "/" .. dir_pattern
+      if vim.fn.isdirectory(full_path) == 1 then
+        return full_path
+      end
+    end
+  end
+
+  return nil
 end
 
 --- 检查文件类型是否支持

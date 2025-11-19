@@ -12,17 +12,23 @@ local M = {}
 --- @param filepath string 文件路径
 --- @param callback fun(results: I18n.ParseResult[]) 回调函数
 function M.parse_file_async(filepath, callback)
-  -- 使用 rg 搜索 t("...") 或 t('...') 模式
+  local config = require("i18n.config")
+  local patterns = config.config.translation_patterns or { [[t\(["']([^"']+)["']\)]] }
+  
+  -- 使用 rg 搜索所有配置的模式
   -- -n: 显示行号
   -- -o: 只显示匹配的部分
   -- --column: 显示列号
   -- --json: JSON 格式输出
+  -- 构建多模式匹配：pattern1|pattern2|pattern3
+  local combined_pattern = table.concat(patterns, "|")
+  
   local args = {
     "rg",
     "--json",
     "-n",
     "--column",
-    [[t\(["']([^"']+)["']\)]],
+    combined_pattern,
     filepath,
   }
 
@@ -47,14 +53,25 @@ function M.parse_file_async(filepath, callback)
           local ok, data = pcall(vim.json.decode, line)
           if ok and data.type == "match" then
             local match_data = data.data
-            -- 从匹配文本中提取 key
-            local key = match_data.lines.text:match([[t%(["']([^"']+)["']%)]])
+            -- 尝试从匹配文本中提取 key（尝试所有模式）
+            local key = nil
+            local text = match_data.lines.text
+            
+            for _, pattern in ipairs(patterns) do
+              -- 将 rg 正则转换为 Lua 模式
+              local lua_pattern = pattern:gsub("\\%(", "%("):gsub("\\%)", "%)"):gsub("\\%[", "%["):gsub("\\%]", "%]")
+              key = text:match(lua_pattern)
+              if key then
+                break
+              end
+            end
+            
             if key then
               table.insert(results, {
                 key = key,
                 line = match_data.line_number,
-                col = match_data.submatches[1].start + 1, -- rg 是 0-based
-                text = match_data.lines.text:gsub("^%s+", ""), -- 去除前导空格
+                col = match_data.submatches[1] and (match_data.submatches[1].start + 1) or 1, -- rg 是 0-based
+                text = text:gsub("^%s+", ""), -- 去除前导空格
               })
             end
           end
@@ -70,12 +87,16 @@ end
 --- @param filepath string 文件路径
 --- @return I18n.ParseResult[]
 function M.parse_file_sync(filepath)
+  local config = require("i18n.config")
+  local patterns = config.config.translation_patterns or { [[t\(["']([^"']+)["']\)]] }
+  local combined_pattern = table.concat(patterns, "|")
+  
   local args = {
     "rg",
     "--json",
     "-n",
     "--column",
-    [[t\(["']([^"']+)["']\)]],
+    combined_pattern,
     filepath,
   }
 
@@ -97,13 +118,23 @@ function M.parse_file_sync(filepath)
       local ok, data = pcall(vim.json.decode, line)
       if ok and data.type == "match" then
         local match_data = data.data
-        local key = match_data.lines.text:match([[t%(["']([^"']+)["']%)]])
+        local text = match_data.lines.text
+        local key = nil
+        
+        for _, pattern in ipairs(patterns) do
+          local lua_pattern = pattern:gsub("\\%(", "%("):gsub("\\%)", "%)"):gsub("\\%[", "%["):gsub("\\%]", "%]")
+          key = text:match(lua_pattern)
+          if key then
+            break
+          end
+        end
+        
         if key then
           table.insert(results, {
             key = key,
             line = match_data.line_number,
-            col = match_data.submatches[1].start + 1,
-            text = match_data.lines.text:gsub("^%s+", ""),
+            col = match_data.submatches[1] and (match_data.submatches[1].start + 1) or 1,
+            text = text:gsub("^%s+", ""),
           })
         end
       end
@@ -126,17 +157,24 @@ function M.parse_line_async(filepath, line_number, callback)
   end
 
   local line_text = lines[#lines]
+  local config = require("i18n.config")
+  local patterns = config.config.translation_patterns or { [[t\(["']([^"']+)["']\)]] }
 
-  -- 使用 Lua 模式匹配查找所有 t() 调用
+  -- 使用 Lua 模式匹配查找所有配置的模式
   local results = {}
-  for key in line_text:gmatch([[t%(["']([^"']+)["']%)]]) do
-    local col = line_text:find([[t%(["']]] .. key:gsub("[%(%)%.%%%+%-%*%?%[%]%^%$]", "%%%1"))
-    table.insert(results, {
-      key = key,
-      line = line_number,
-      col = col or 1,
-      text = line_text:gsub("^%s+", ""),
-    })
+  for _, pattern in ipairs(patterns) do
+    -- 将 rg 正则转换为 Lua 模式
+    local lua_pattern = pattern:gsub("\\%(", "%("):gsub("\\%)", "%)"):gsub("\\%[", "%["):gsub("\\%]", "%]")
+    
+    for key in line_text:gmatch(lua_pattern) do
+      local col = line_text:find(key, 1, true) -- 找到 key 的位置
+      table.insert(results, {
+        key = key,
+        line = line_number,
+        col = col or 1,
+        text = line_text:gsub("^%s+", ""),
+      })
+    end
   end
 
   vim.schedule(function()
