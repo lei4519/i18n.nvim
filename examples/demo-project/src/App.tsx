@@ -34,7 +34,7 @@ function App() {
         <p>{t("common.thanks")} 1 {t("common.goodbye")} 23</p>
         <p>{t("common.goodbye")}</p>
         <p>{t("common.goodbye")}223</p>
-        <p>{t("common.goodbye")}223 t("common.goodbye")</p>
+        <p>{t("common.goodbye1.last.name")}223 t("common.goodbye")</p>
       </footer>
     </div>
   );

@@ -3,7 +3,12 @@
     "hello": "こんにちは世界",
     "welcome": "私たちのアプリケーションへようこそ",
     "goodbye": "さようなら",
-    "thanks": "ありがとう"
+    "thanks": "ありがとう",
+    "goodbye1": {
+      "last": {
+        "name": "ラストG"
+      }
+    }
   },
   "auth": {
     "login": "ログイン",

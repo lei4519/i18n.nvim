@@ -295,8 +295,6 @@ Output format (JSON only, no explanation):
     "-d", request_body,
   }
 
-  vim.notify("request_body" .. prompt)
-
   vim.system(args, {}, function(obj)
     vim.schedule(function()
       if obj.code ~= 0 then
@@ -333,7 +331,6 @@ Output format (JSON only, no explanation):
         local content = response.choices[1].message.content
         -- 去除首尾空格和换行
         content = content:gsub("^%s+", ""):gsub("%s+$", "")
-vim.notify("content" .. content)
         -- 尝试提取 JSON（可能包含在代码块中）
         local json_str = content:match("```json\n(.+)\n```") or content:match("```\n(.+)\n```") or content
 

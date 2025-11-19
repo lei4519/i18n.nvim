@@ -3,7 +3,12 @@
     "hello": "你好世界",
     "welcome": "欢迎使用我们的应用",
     "goodbye": "再见",
-    "thanks": "谢谢你"
+    "thanks": "谢谢你",
+    "goodbye1": {
+      "last": {
+        "name": "最后G"
+      }
+    }
   },
   "auth": {
     "login": "登录",

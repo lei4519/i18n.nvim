@@ -3,7 +3,12 @@
     "hello": "Hello World",
     "welcome": "Welcome to our application",
     "goodbye": "Goodbye",
-    "thanks": "Thank you"
+    "thanks": "Thank you",
+    "goodbye1": {
+      "last": {
+        "name": "Last G"
+      }
+    }
   },
   "auth": {
     "login": "Login",
