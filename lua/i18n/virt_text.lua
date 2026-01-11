@@ -35,12 +35,22 @@ function M.set_virt_text(bufnr, line, col, text)
   -- 删除该位置已有的虚拟文本（如果存在）
   M.clear_virt_text_at_position(bufnr, line, col)
 
-  -- 设置新的虚拟文本（显示在指定列位置，inline 模式）
-  local extmark_id = vim.api.nvim_buf_set_extmark(bufnr, ns_id, line - 1, col - 1, {
+  -- 根据配置设置虚拟文本位置
+  local position = config.config.virt_text.position or "inline"
+  local extmark_opts = {
     virt_text = { { virt_text, highlight } },
-    virt_text_pos = "inline",
     hl_mode = "combine",
-  })
+  }
+
+  if position == "eol" then
+    -- 行尾模式：虚拟文本显示在行尾
+    extmark_opts.virt_text_pos = "eol"
+  else
+    -- 内联模式：虚拟文本显示在代码中间（指定位置）
+    extmark_opts.virt_text_pos = "inline"
+  end
+
+  local extmark_id = vim.api.nvim_buf_set_extmark(bufnr, ns_id, line - 1, col - 1, extmark_opts)
 
   -- 记录 extmark（支持同一行多个位置）
   if not buffer_extmarks[bufnr] then

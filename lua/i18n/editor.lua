@@ -516,15 +516,33 @@ function M.open_editor(key)
   end
 end
 
+--- 转义特殊字符用于 Lua 模式匹配
+--- @param str string 要转义的字符串
+--- @return string 转义后的字符串
+local function escape_pattern(str)
+  return str:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
+end
+
 --- 从光标位置获取 i18n key
 --- @return string|nil
 function M.get_key_under_cursor()
   local line = vim.api.nvim_get_current_line()
+  local method_names = config.config.translation_method_names or { "t" }
 
-  -- 尝试匹配 t("key") 或 t('key')
-  local key = line:match([[t%(["']([^"']+)["']%)]]) or line:match([[t%("([^"]+)"%)]]) or line:match([[t%('([^']+)'%)]])
+  -- 遍历所有配置的翻译函数名
+  for _, method_name in ipairs(method_names) do
+    local escaped_name = escape_pattern(method_name)
+    -- 尝试匹配 functionName("key") 或 functionName('key')
+    local double_quote_pattern = escaped_name .. '%("([^"]+)"%)'
+    local single_quote_pattern = escaped_name .. "%('([^']+)'%)"
 
-  return key
+    local key = line:match(double_quote_pattern) or line:match(single_quote_pattern)
+    if key then
+      return key
+    end
+  end
+
+  return nil
 end
 
 return M

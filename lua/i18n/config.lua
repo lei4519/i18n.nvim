@@ -29,6 +29,7 @@ local default_config = {
     max_length = 50, -- 最大显示长度，0 表示不限制
     prefix = " 💬 ", -- 前缀
     highlight = "Comment", -- 高亮组
+    position = "inline", -- 显示位置：inline（内联，在代码中间显示）或 eol（行尾显示）
   },
   auto_detect_project = true, -- 自动检测项目根目录
   filetypes = { "typescript", "javascript", "typescriptreact", "javascriptreact" },
@@ -63,6 +64,7 @@ local default_config = {
 --- @field max_length number 最大显示长度
 --- @field prefix string 前缀
 --- @field highlight string 高亮组
+--- @field position "inline"|"eol" 虚拟文本显示位置：inline（内联）或 eol（行尾）
 
 --- 当前配置
 --- @type I18n.Config
@@ -109,20 +111,18 @@ function M.get_project_root(bufnr)
     return vim.fn.getcwd()
   end
 
--- 检查缓存
-if project_root_cache[path] then
+  -- 检查缓存
+  if project_root_cache[path] then
     return project_root_cache[path]
-end
+  end
 
   local root = vim.fs.root(path, markers)
-local result = root or vim.fn.getcwd()
+  local result = root or vim.fn.getcwd()
 
+  -- 缓存结果
+  project_root_cache[path] = result
 
--- 缓存结果
-project_root_cache[path] = result
-
-return result
-
+  return result
 end
 
 --- 获取 i18n 目录的完整路径（带缓存）
@@ -136,10 +136,10 @@ function M.get_i18n_dir(bufnr)
     return nil
   end
 
--- 检查缓存
-if i18n_dir_cache[root] ~= nil then
+  -- 检查缓存
+  if i18n_dir_cache[root] ~= nil then
     return i18n_dir_cache[root]
-end
+  end
 
   local i18n_dir = M.config.i18n_dir
 
@@ -148,7 +148,7 @@ end
     i18n_dir = { i18n_dir }
   end
 
-local result = nil
+  local result = nil
 
   -- 按顺序查找第一个存在的目录
   for _, dir_pattern in ipairs(i18n_dir) do
@@ -160,31 +160,27 @@ local result = nil
       -- 返回第一个匹配的目录
       for _, match in ipairs(matches) do
         if vim.fn.isdirectory(match) == 1 then
-result = match
-break
-
+          result = match
+          break
         end
       end
-if result then
-    break
-end
-
+      if result then
+        break
+      end
     else
       -- 普通路径
       local full_path = root .. "/" .. dir_pattern
       if vim.fn.isdirectory(full_path) == 1 then
-result = full_path
-break
-
+        result = full_path
+        break
       end
     end
   end
 
--- 缓存结果（包括 nil 值，避免重复查找）
-i18n_dir_cache[root] = result
+  -- 缓存结果（包括 nil 值，避免重复查找）
+  i18n_dir_cache[root] = result
 
-return result
-
+  return result
 end
 
 --- 检查文件类型是否支持
@@ -196,8 +192,8 @@ end
 
 --- 清空所有缓存
 function M.clear_all_cache()
-    project_root_cache = {}
-    i18n_dir_cache = {}
+  project_root_cache = {}
+  i18n_dir_cache = {}
 end
 
 return M
